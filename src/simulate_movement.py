@@ -13,6 +13,7 @@ config.read("configfile.ini", encoding="utf-8")
 
 # Read nanorobot modeling parameters
 MODEL_NAME = config["PATHS"]["robot_model"]
+OUTPUT_PATH = config["PATHS"]["output_path"]
 CONFIG_NAMES_STR = config["NANOROBOT_MODELING"]["configuration_names"]
 EXP_DATA_PATH_A = config["NANOROBOT_MODELING"]["path_to_experimental_data_a"]
 EXP_DATA_PATH_B = config["NANOROBOT_MODELING"]["path_to_experimental_data_b"]
@@ -40,7 +41,7 @@ if __name__ == "__main__":
 
     try:
         # Load trained weights
-        with open("best_mlp_weights.pkl", "rb") as f:
+        with open(OUTPUT_PATH+"best_mlp_weights.pkl", "rb") as f:
             loaded_weights = pickle.load(f)
         mlp_model.set_weights(loaded_weights)
         print("Trained MLP model loaded successfully.")
