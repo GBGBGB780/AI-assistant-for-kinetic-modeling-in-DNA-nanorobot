@@ -73,7 +73,7 @@ if __name__ == "__main__":
         print("Simulation complete.")
 
         # Save simulated data to CSV
-        output_csv_path = "simulated_movement.csv"
+        output_csv_path = "results/compare_data/simulated_movement.csv"
         simulated_df.to_csv(output_csv_path, index=False)
         print(f"Simulated movement data saved to {output_csv_path}")
 
