@@ -17,14 +17,14 @@ MODEL_NAME = config["PATHS"]["robot_model"]
 OUTPUT_PATH = config["PATHS"]["output_path"]
 CONFIG_NAMES_STR = config["NANOROBOT_MODELING"]["configuration_names"]
 EXP_DATA_PATH_A = config["NANOROBOT_MODELING"]["path_to_experimental_data_a"]
-EXP_DATA_PATH_B = config["NANOROBOT_MODELING"]["path_to_experimental_data_b"]
 SIM_TIME_STEP = float(config["NANOROBOT_MODELING"]["sim_time_step"])
 SIM_TOTAL_TIME = float(config["NANOROBOT_MODELING"]["sim_total_time"])
 INITIAL_CONFIG_IDX = int(config["NANOROBOT_MODELING"]["initial_configuration_idx"])
 REWARD_FLAG = int(config["REWARDS"]["reward_flag"])
 
 # 加载纳米机器人动力学求解器 (模拟与评估)
-nanorobot_solver = NanorobotSolver(MODEL_NAME, CONFIG_NAMES_STR, EXP_DATA_PATH_A, EXP_DATA_PATH_B)
+nanorobot_solver = NanorobotSolver(MODEL_NAME, CONFIG_NAMES_STR, EXP_DATA_PATH_A)
+
 
 # 定义需要优化的参数名称列表（与MLP输出对应）,删除了'E_b_azo_cis'
 PARAMETER_NAMES = [

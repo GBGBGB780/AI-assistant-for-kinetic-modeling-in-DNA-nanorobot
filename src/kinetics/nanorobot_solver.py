@@ -11,13 +11,13 @@ import math
 
 
 class NanorobotSolver:
-    def __init__(self, model_name, config_names_str, experimental_data_path_a, experimental_data_path_b):
+    def __init__(self, model_name, config_names_str, experimental_data_path_a):
         self.model_name = model_name
-        self.num_configs = 14  # 核心修改：统一为14个状态
+        self.num_configs = 14
         self.config_names = [f"State_{i}" for i in range(self.num_configs)]
 
         self.experimental_data_a = self._load_experimental_data(experimental_data_path_a)
-        self.experimental_data_b = self._load_experimental_data(experimental_data_path_b)
+        self.experimental_data_b = None
         self.parameters = None
 
         self.default_mechanics_params = {
@@ -103,6 +103,8 @@ class NanorobotSolver:
         self.parameters = {}
         self.parameters.update(self.default_mechanics_params)
         self.parameters.update(self.default_kinetics_params)
+        print(self.default_mechanics_params)
+        print(self.default_kinetics_params)
         if params_dict:
             for k, v in params_dict.items():
                 self.parameters[k] = v
@@ -277,9 +279,7 @@ class NanorobotSolver:
 
     def _calculate_transition_rates(self, E_config_t, f_config_t, E_config_c, f_config_c):
         """
-        Calculates the 14x14 transition rate matrices (k_trans, k_cis)
-        and the final ODE matrices (K_matrix_trans, K_matrix_cis),
-        perfectly matching the logic from the MATLAB script.
+        Calculates the 14x14 transition rate matrices...
         """
         if self.parameters is None:
             raise ValueError("Parameters not set.")
@@ -292,13 +292,14 @@ class NanorobotSolver:
         drt_s = self._safe_float(p.get("drt_s", 0.05), min_val=1e-12)
         kBT = self._safe_float(p.get("kBT", 4.14), min_val=1e-12)
 
-        k_trans = np.zeros((self.num_configs, self.num_configs))
-        k_cis = np.zeros((self.num_configs, self.num_configs))
+        # 明确使用 float64 以保证精度
+        k_trans = np.zeros((self.num_configs, self.num_configs), dtype=np.float64)
+        k_cis = np.zeros((self.num_configs, self.num_configs), dtype=np.float64)
 
-        # 定义一个安全的指数函数防止计算溢出
+        # 定义一个更健壮的、防止溢出的指数函数
         def safe_exp(val):
-            # The value is E_diff / kBT. E_diff is typically within -20 to 20 kBT.
-            # Clipping at a larger range like -100 to 100 is safe.
+            # 将输入值限制在一个安全的范围内，例如[-100, 100]
+            # 这可以从根本上防止 math.exp() 返回 inf
             return math.exp(np.clip(val, -100, 100))
 
         try:
@@ -446,133 +447,76 @@ class NanorobotSolver:
             k_cis[13, 9] = k_mig
             k_cis[11, 9] = k_cis[9, 11] * safe_exp((E_config_c[11] - E_config_c[9]) / kBT)
             k_cis[9, 13] = k_cis[13, 9] * safe_exp((E_config_c[9] - E_config_c[13]) / kBT)
+        except Exception as e:
+            print(f"An error occurred during transition rate calculation: {e}")
+            return np.zeros_like(k_trans), np.zeros_like(k_cis)
 
-        except OverflowError:
-            # In case np.clip is not enough, this provides a fallback
-            print("Warning: Overflow in rate calculation. Some rates might be incorrect.")
+        return k_trans, k_cis
 
-        # --- 最后，构建用于ODE求解器的矩阵 K (也称为 A 或 Q 矩阵) ---
-        # 主方程 dP/dt = K * P, 其中:
-        # K[i, j] = k_{j, i}  (j -> i 的速率)
-        # K[i, i] = - sum_l(k_{i, l}) (从 i -> 所有 l 的速率总和的负值)
-        K_matrix_trans = np.zeros((self.num_configs, self.num_configs))
-        K_matrix_cis = np.zeros((self.num_configs, self.num_configs))
-
-        # 填充非对角线元素 (注意转置：K的(i,j)元素是k矩阵的(j,i)元素)
+    def _ode_system(self, t, P, k_matrix, k_photo, light_on):
+        """
+        Defines the system of ordinary differential equations (ODEs).
+        """
+        dP_dt = np.zeros(self.num_configs)
         for i in range(self.num_configs):
+            sum_val = 0
             for j in range(self.num_configs):
                 if i != j:
-                    K_matrix_trans[i, j] = k_trans[j, i]
-                    K_matrix_cis[i, j] = k_cis[j, i]
+                    sum_val += k_matrix[j, i] * P[j] - k_matrix[i, j] * P[i]
+            dP_dt[i] = sum_val
 
-        # 填充对角线元素 (离出速率总和的负值)
-        for i in range(self.num_configs):
-            K_matrix_trans[i, i] = -np.sum(k_trans[i, :])
-            K_matrix_cis[i, i] = -np.sum(k_cis[i, :])
+        if light_on:
+            for i in range(self.num_configs):
+                dP_dt[i] -= k_photo * P[i]
 
-        # 清理最终结果，防止非法值
-        K_matrix_trans = self._sanitize_array(K_matrix_trans, nan_replacement=0.0)
-        K_matrix_cis = self._sanitize_array(K_matrix_cis, nan_replacement=0.0)
+        return dP_dt
 
-        return K_matrix_trans, K_matrix_cis
-
-    def _ode_system(self, t, P, k_matrix):
-        return np.dot(k_matrix, P)
-
-    def simulate(self, initial_P, sim_time_step, sim_total_time, light_schedule=None):
+    def run_simulation(self, t_span, light_on_time, light_off_time):
         """
-        Runs the full kinetic simulation over time.
-
-        Args:
-            initial_P (list or np.array): A 14-element vector of initial state probabilities.
-            sim_time_step (float): The time step for the output data (in seconds).
-            sim_total_time (float): The total simulation time (in seconds).
-            light_schedule (list, optional): A list of tuples defining the light sequence,
-                                             e.g., [(600, 'vis'), (1200, 'uv')].
-                                             If None, defaults to 10-min alternating light.
-
-        Returns:
-            pd.DataFrame: A DataFrame containing the time evolution of the 14 state probabilities.
+        Runs the full simulation...
         """
-        # 1. 首先计算出模型所需的能量和速率矩阵
         E_config_t, f_config_t, E_config_c, f_config_c = self._calculate_free_energies()
-        k_trans_matrix, k_cis_matrix = self._calculate_transition_rates(E_config_t, f_config_t, E_config_c, f_config_c)
+        k_trans, k_cis = self._calculate_transition_rates(E_config_t, f_config_t, E_config_c, f_config_c)
 
-        # 2. 验证并设置初始概率分布
-        current_P = np.array(initial_P, dtype=float)
-        if current_P.size != self.num_configs or abs(np.sum(current_P) - 1.0) > 1e-6:
-            print(f"Warning: Invalid initial_P provided. It must be a {self.num_configs}-element array summing to 1.")
-            print("Defaulting to 100% probability in State 0.")
-            current_P = np.zeros(self.num_configs, dtype=float)
-            current_P[0] = 1.0
+        k_photo = self._safe_float(self.parameters.get('k_photo', 0.0))
 
-        # 3. 如果未提供光照方案，则创建与MATLAB一致的默认方案
-        if light_schedule is None:
-            light_schedule = []
-            interval = 600  # 10 minutes in seconds
-            num_intervals = math.ceil(sim_total_time / interval)
-            for i in range(num_intervals):
-                end_time = (i + 1) * interval
-                light_type = 'vis' if (i % 2) == 0 else 'uv'
-                light_schedule.append((min(end_time, sim_total_time), light_type))
+        P0 = np.zeros(self.num_configs)
+        P0[0] = 1.0
 
-        # 4. 分段进行ODE求解
-        all_results = []
-        current_time = 0.0
+        # --- Simulation before light is on ---
+        sol_before = solve_ivp(
+            lambda t, P: self._ode_system(t, P, k_trans, k_photo, False),
+            (t_span[0], light_on_time),
+            P0, method='RK45', dense_output=True, rtol=1e-6, atol=1e-9
+        )
 
-        for segment_end_time, light in light_schedule:
-            if current_time >= sim_total_time:
-                break
+        # --- Simulation when light is on ---
+        P_at_light_on = sol_before.y[:, -1]
+        sol_light_on = solve_ivp(
+            lambda t, P: self._ode_system(t, P, k_cis, k_photo, True),
+            (light_on_time, light_off_time),
+            P_at_light_on, method='RK45', dense_output=True, rtol=1e-6, atol=1e-9
+        )
 
-            t_start = current_time
-            # 确保段的结束时间不超过总模拟时间
-            t_end = min(segment_end_time, sim_total_time)
+        # --- Simulation after light is off ---
+        P_at_light_off = sol_light_on.y[:, -1]
+        sol_after = solve_ivp(
+            lambda t, P: self._ode_system(t, P, k_trans, k_photo, False),
+            (light_off_time, t_span[1]),
+            P_at_light_off, method='RK45', dense_output=True, rtol=1e-6, atol=1e-9
+        )
 
-            # 根据光照类型选择正确的速率矩阵
-            k_matrix = k_trans_matrix if light.lower() == 'vis' else k_cis_matrix
+        # --- Combine results ---
+        t_combined = np.concatenate((sol_before.t, sol_light_on.t, sol_after.t))
+        P_combined = np.hstack((sol_before.y, sol_light_on.y, sol_after.y))
 
-            # 定义该段的求解时间点
-            t_eval = np.arange(t_start, t_end, sim_time_step)
-            if t_eval.size == 0 or t_eval[-1] < t_end:
-                t_eval = np.append(t_eval, t_end)
+        # Sort by time to ensure monotonicity
+        sort_indices = np.argsort(t_combined)
+        t_combined = t_combined[sort_indices]
+        P_combined = P_combined[:, sort_indices]
 
-            # 使用scipy的solve_ivp求解器
-            solution = solve_ivp(
-                fun=self._ode_system,
-                t_span=[t_start, t_end],
-                y0=current_P,
-                method='Radau',  # 'Radau' 是一种适合刚性系统的求解器
-                t_eval=t_eval,
-                args=(k_matrix,)
-            )
-
-            # 存储该段的结果 (转置 .y 使其 shape 为 [n_points, n_states])
-            # 去掉第一个点，除非是第一个段，以避免时间点重复
-            result_segment = solution.y.T
-            if len(all_results) > 0:
-                all_results.append(result_segment[1:, :])
-            else:
-                all_results.append(result_segment)
-
-            # 更新下一段的初始条件和起始时间
-            current_P = solution.y[:, -1]
-            current_time = t_end
-
-        # 5. 整合结果并创建DataFrame
-        if not all_results:
-            print("Warning: Simulation produced no results.")
-            return pd.DataFrame(columns=['Time'] + [f'P_{i}' for i in range(self.num_configs)])
-
-        final_P_history = np.vstack(all_results)
-        final_time_points = np.arange(0, final_P_history.shape[0] * sim_time_step, sim_time_step)
-
-        # 确保时间和概率矩阵的长度一致
-        max_len = min(len(final_time_points), final_P_history.shape[0])
-
-        sim_df = pd.DataFrame(final_P_history[:max_len, :], columns=[f'P_{i}' for i in range(self.num_configs)])
-        sim_df['Time'] = final_time_points[:max_len]
-
-        # 将Time列放到第一列
+        sim_df = pd.DataFrame(P_combined.T, columns=[f'P_{i}' for i in range(self.num_configs)])
+        sim_df['Time'] = t_combined
         sim_df = sim_df[['Time'] + [f'P_{i}' for i in range(self.num_configs)]]
 
         return sim_df
@@ -581,27 +525,23 @@ class NanorobotSolver:
     def evaluate_model(self, simulated_data_df, reward_flag=0):
         if reward_flag == 0:
             # 初始检查仍然保留，但我们会添加更具体的检查
-            if self.experimental_data_a is None and self.experimental_data_b is None:
-                print("Error: Both experimental datasets failed to load. Cannot calculate reward.")
+            if self.experimental_data_a is None:
+                print("Error: Experimental dataset 'a' failed to load. Cannot calculate reward.")
                 return -1000.0
 
             p_unbind_track = self._safe_float(self.parameters.get('p_unbind_track', 0.09507))
 
             datasets = {
-                'a': self.experimental_data_a,
-                'b': self.experimental_data_b
+                'a': self.experimental_data_a
             }
 
             total_nmse = 0
             num_signals = 0
 
             for name, exp_df in datasets.items():
-                # ==================== 核心修改：增加对每个数据集的None值检查 ====================
-                # 在尝试访问 exp_df 的任何内容之前，先检查它是否为 None
                 if exp_df is None:
                     print(f"Warning: Dataset '{name}' was not loaded successfully. Skipping its evaluation.")
-                    continue  # 使用 continue 跳过本次循环
-                # =================================================================================
+                    continue
 
                 try:
                     # 1. 提取和清理实验数据
