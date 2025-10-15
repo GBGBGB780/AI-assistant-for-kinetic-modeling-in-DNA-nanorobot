@@ -124,7 +124,7 @@ if __name__ == "__main__":
 
     # 从配置文件读取进化策略超参数
     pop_size = int(config["EVOSTRAT"]["population_size"])
-    sigma = float(config["EVOSTRAT"]["sigma"])
+    sigma = float(config["EVOSTRAT"]["noise"])
     lr = float(config["EVOSTRAT"]["learning_rate"])
     n_iter = int(config["EVOSTRAT"]["generations"])
 
