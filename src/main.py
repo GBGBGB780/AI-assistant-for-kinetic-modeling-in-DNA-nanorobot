@@ -13,29 +13,41 @@ config = configparser.ConfigParser()
 config.read("configfile.ini", encoding="utf-8")
 
 # 读取纳米机器人建模相关参数
+# 自动设置固定参数以及带训练参数
+fixed_params = {}
+trainable_params_names = []
+all_physical_params = config['PHYSICAL_PARAMETERS']
+
+for name, value in all_physical_params.items():
+    if value.strip() == "":
+        # 如果值为空，则为待训练参数
+        trainable_params_names.append(name)
+    else:
+        # 如果有值，则为固定参数
+        fixed_params[name] = float(value)
+
+print(f"将要训练 {len(trainable_params_names)} 个参数: {trainable_params_names}")
+print(f"将使用 {len(fixed_params)} 个固定参数。")
+
+# 读取待训练参数的范围
+param_ranges = {}
+if config.has_section('TRAINING_PARAMETER_RANGES'):
+    for name, value in config.items('TRAINING_PARAMETER_RANGES'):
+        min_val, max_val = [float(x.strip()) for x in value.split(',')]
+        param_ranges[name] = (min_val, max_val)
+
 MODEL_NAME = config["PATHS"]["robot_model"]
 OUTPUT_PATH = config["PATHS"]["output_path"]
 EXP_DATA_PATH_A = config["NANOROBOT_MODELING"]["path_to_experimental_data_a"]
 SIM_TOTAL_TIME = float(config["NANOROBOT_MODELING"]["sim_total_time"])
 INITIAL_CONFIG_IDX = int(config["NANOROBOT_MODELING"]["initial_configuration_idx"])
 REWARD_FLAG = int(config["REWARDS"]["reward_flag"])
-MIN_PARAM = float(config["CONSTRAINTS"]["min_param"])
-MAX_PARAM = float(config["CONSTRAINTS"]["max_param"])
 
 CYCLE_DURATION_VIS = float(config["NANOROBOT_MODELING"]["cycle_duration_vis"])
 CYCLE_DURATION_UV = float(config["NANOROBOT_MODELING"]["cycle_duration_uv"])
 LIGHT_START_MODE = int(config["NANOROBOT_MODELING"]["light_start_mode"])
 # 加载纳米机器人动力学求解器 (模拟与评估)
 nanorobot_solver = NanorobotSolver(MODEL_NAME, EXP_DATA_PATH_A)
-
-
-# 定义需要优化的参数名称列表（与MLP输出对应）,删除了'E_b_azo_cis'
-PARAMETER_NAMES = [
-    "kBT", "lp_s", "lc_s", "lc_d", "E_b", "E_b_azo_trans",
-    "di_DNA", "n_D1", "n_D2", "n_S1", "n_gray", "n_hairpin_1", "n_hairpin_2",
-    "n_azo_1", "n_azo_2", "n_T_hairpin_1", "n_T_hairpin_2", "n_track_1", "n_track_2",
-    "k0", "k_mig", "drt_z", "drt_s", "dE_TYE"
-]
 
 
 def reward_func(weights, mlp_model):
@@ -54,11 +66,14 @@ def reward_func(weights, mlp_model):
         # noise_input 应该是一个 PyTorch tensor
         noise_input = np.random.randn(1, mlp_model.input_size)
         generated_array = mlp_model.predict(noise_input)
-        # 将输出数组映射为参数字典
-        params = {name: float(value) for name, value in zip(PARAMETER_NAMES, generated_array[0])}
+        trained_params = {name: float(value) for name, value in zip(trainable_params_names, generated_array[0])}
 
-        # 设置纳米机器人模型的参数
-        nanorobot_solver.set_parameters(params)
+        # 合并固定参数和训练参数
+        all_params = fixed_params.copy()
+        all_params.update(trained_params)
+
+        # 设置参数并运行模拟
+        nanorobot_solver.set_parameters(all_params)
 
         light_schedule = []
         current_time = 0
@@ -98,25 +113,20 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # 初始化MLP生成器：输入和输出维度均为参数数量
-    input_dim = len(PARAMETER_NAMES)
-    output_dim = len(PARAMETER_NAMES)
-    mlp_model = MLP(input_size=input_dim, output_size=output_dim, hidden_sizes=[50, 50], device=device)
+    # 初始化MLP，其输入输出维度由待训练参数的数量决定
+    input_dim = len(trainable_params_names)
+    output_dim = len(trainable_params_names)
+    mlp_model = MLP(input_size=input_dim, output_size=output_dim, hidden_sizes=[50, 50],
+                    device=device, param_names=trainable_params_names, param_ranges=param_ranges)
 
     # 初始权重向量
     initial_weights = mlp_model.get_weights()
 
-    # 从配置文件读取进化策略超参数（可选）
-    try:
-        pop_size = int(config["EVOLUTION"]["population_size"])
-        sigma = float(config["EVOLUTION"]["sigma"])
-        lr = float(config["EVOLUTION"]["learning_rate"])
-        n_iter = int(config["EVOLUTION"]["generations"])
-    except KeyError:
-        pop_size = 50
-        sigma = 0.1
-        lr = 0.01
-        n_iter = 1000
+    # 从配置文件读取进化策略超参数
+    pop_size = int(config["EVOSTRAT"]["population_size"])
+    sigma = float(config["EVOSTRAT"]["sigma"])
+    lr = float(config["EVOSTRAT"]["learning_rate"])
+    n_iter = int(config["EVOSTRAT"]["generations"])
 
     # 创建并运行进化策略优化
     es = EvolutionStrategy(initial_weights, reward_func, mlp_model,

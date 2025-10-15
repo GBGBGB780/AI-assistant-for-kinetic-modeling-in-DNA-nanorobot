@@ -10,7 +10,8 @@ class MLP(nn.Module):
     输入：噪声向量；输出：与 PARAMETER_NAMES 对应的参数值数组。
     """
 
-    def __init__(self, input_size, output_size, hidden_sizes=[50, 50], device=None):
+    def __init__(self, input_size, output_size, hidden_sizes=[50, 50], device=None,
+                 param_names=None, param_ranges=None):
         super(MLP, self).__init__()
         self.input_size = input_size
         self.output_size = output_size
@@ -20,6 +21,18 @@ class MLP(nn.Module):
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = device
+
+        default_min, default_max = param_ranges['default_range']
+        min_vals = []
+        max_vals = []
+        for name in param_names:
+            min_val, max_val = param_ranges.get(name, (default_min, default_max))
+            min_vals.append(min_val)
+            max_vals.append(max_val)
+
+        # 将范围转换为 PyTorch 张量并存储，以便在 predict 中高效使用
+        self.min_vals = torch.tensor(min_vals, dtype=torch.float32, device=self.device)
+        self.max_vals = torch.tensor(max_vals, dtype=torch.float32, device=self.device)
 
         layers = []
         # 输入层
@@ -69,4 +82,7 @@ class MLP(nn.Module):
         X_tensor = torch.from_numpy(X).float().to(self.device)
         with torch.no_grad():  # 预测时不需要计算梯度
             output = self.model(X_tensor)
-        return output.cpu().numpy()  # 确保返回numpy数组
+        # 进行范围限制
+        scaled_output = (output + 1) / 2 * (self.max_vals - self.min_vals) + self.min_vals
+
+        return scaled_output.cpu().numpy()
