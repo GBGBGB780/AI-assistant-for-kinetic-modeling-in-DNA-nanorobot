@@ -1,3 +1,2 @@
-conda create -n nanorobot python=3.9
-conda activate nanorobot
+Readme file：To be Determined
 pip install -r requirements.txt
