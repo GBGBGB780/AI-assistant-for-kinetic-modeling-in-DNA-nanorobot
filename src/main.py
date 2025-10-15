@@ -16,11 +16,15 @@ config.read("configfile.ini", encoding="utf-8")
 MODEL_NAME = config["PATHS"]["robot_model"]
 OUTPUT_PATH = config["PATHS"]["output_path"]
 EXP_DATA_PATH_A = config["NANOROBOT_MODELING"]["path_to_experimental_data_a"]
-SIM_TIME_STEP = float(config["NANOROBOT_MODELING"]["sim_time_step"])
 SIM_TOTAL_TIME = float(config["NANOROBOT_MODELING"]["sim_total_time"])
 INITIAL_CONFIG_IDX = int(config["NANOROBOT_MODELING"]["initial_configuration_idx"])
 REWARD_FLAG = int(config["REWARDS"]["reward_flag"])
+MIN_PARAM = float(config["CONSTRAINTS"]["min_param"])
+MAX_PARAM = float(config["CONSTRAINTS"]["max_param"])
 
+CYCLE_DURATION_VIS = float(config["NANOROBOT_MODELING"]["cycle_duration_vis"])
+CYCLE_DURATION_UV = float(config["NANOROBOT_MODELING"]["cycle_duration_uv"])
+LIGHT_START_MODE = int(config["NANOROBOT_MODELING"]["light_start_mode"])
 # 加载纳米机器人动力学求解器 (模拟与评估)
 nanorobot_solver = NanorobotSolver(MODEL_NAME, EXP_DATA_PATH_A)
 
@@ -56,26 +60,41 @@ def reward_func(weights, mlp_model):
         # 设置纳米机器人模型的参数
         nanorobot_solver.set_parameters(params)
 
-        # 定义初始构型分布（所有概率置零，选定一个初始态概率为1）
+        light_schedule = []
+        current_time = 0
+
+        # 根据起始模式确定光照周期的顺序
+        if LIGHT_START_MODE == 0:  # 先 vis 后 uv
+            phases = [('visible', CYCLE_DURATION_VIS), ('uv', CYCLE_DURATION_UV)]
+        else:  # 先 uv 后 vis (默认为1或其他任何值)
+            phases = [('uv', CYCLE_DURATION_UV), ('visible', CYCLE_DURATION_VIS)]
+
+        # 循环添加光照阶段，直到达到总模拟时间
+        # 添加安全检查，防止因duration为0导致无限循环
+        if sum(p[1] for p in phases) <= 0:
+            print("Warning: Total cycle duration is not positive. No light schedule will be generated.")
+        else:
+            while current_time < SIM_TOTAL_TIME:
+                for light_type, duration in phases:
+                    if duration > 0:  # 仅当持续时间大于0时才添加
+                        current_time += duration
+                        light_schedule.append((current_time, light_type))
+
+        # 定义初始构型
         initial_P = np.zeros(nanorobot_solver.num_configs)
         initial_P[INITIAL_CONFIG_IDX] = 1.0
 
-        # 定义光照时间表（示例或从配置读取）
-        light_schedule = None
+        # 调用模拟函数
+        sim_df = nanorobot_solver.run_simulation(initial_P, SIM_TOTAL_TIME, light_schedule)
 
-        # 运行动力学模拟
-        sim_df = nanorobot_solver.simulate(initial_P, SIM_TIME_STEP, SIM_TOTAL_TIME, light_schedule)
-
-        # 评估与实验数据拟合的奖励（通常为负均方误差）
+        # 评估奖励
         reward = nanorobot_solver.evaluate_model(sim_df, REWARD_FLAG)
         rewards.append(reward)
 
-    # 返回平均奖励
     return float(np.mean(rewards))
 
 
 if __name__ == "__main__":
-    # 确定设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 

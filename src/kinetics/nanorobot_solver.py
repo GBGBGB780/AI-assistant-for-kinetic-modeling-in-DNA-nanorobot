@@ -303,11 +303,7 @@ class NanorobotSolver:
             return math.exp(np.clip(val, -100, 100))
 
         try:
-            # =====================================================================
-            #            完整翻译 MATLAB 的 k_trans 矩阵计算
-            #  注意: MATLAB k_trans(i, j) 对应 Python k_trans[i-1, j-1]
-            # =====================================================================
-
+            # 从matlab代码文件转换
             # --- single-single transitions ---
             k_trans[3, 0] = k_mig  # k_trans(4,1)
             k_trans[4, 1] = k_mig  # k_trans(5,2)
@@ -471,49 +467,70 @@ class NanorobotSolver:
 
         return dP_dt
 
-    def run_simulation(self, t_span, light_on_time, light_off_time):
+    def run_simulation(self, P0, total_sim_time, light_schedule):
         """
-        Runs the full simulation...
+        Runs the full simulation based on a flexible light schedule.
+
+        Args:
+            P0 (np.array): Initial probability distribution of the states.
+            total_sim_time (float): The total duration of the simulation.
+            light_schedule (list): A list of tuples, e.g., [(10, 'visible'), (20, 'uv'), ...],
+                                     defining the end time and condition for each phase.
         """
+        # --- 1. Pre-calculate energy and rate matrices (done once for efficiency) ---
         E_config_t, f_config_t, E_config_c, f_config_c = self._calculate_free_energies()
         k_trans, k_cis = self._calculate_transition_rates(E_config_t, f_config_t, E_config_c, f_config_c)
-
         k_photo = self._safe_float(self.parameters.get('k_photo', 0.0))
 
-        P0 = np.zeros(self.num_configs)
-        P0[0] = 1.0
+        # --- 2. Initialize simulation variables ---
+        current_P = np.array(P0, dtype=np.float64)
+        current_time = 0.0
 
-        # --- Simulation before light is on ---
-        sol_before = solve_ivp(
-            lambda t, P: self._ode_system(t, P, k_trans, k_photo, False),
-            (t_span[0], light_on_time),
-            P0, method='RK45', dense_output=True, rtol=1e-6, atol=1e-9
-        )
+        # Lists to store results from each simulation segment
+        all_times = [current_time]
+        all_probs = [current_P]
 
-        # --- Simulation when light is on ---
-        P_at_light_on = sol_before.y[:, -1]
-        sol_light_on = solve_ivp(
-            lambda t, P: self._ode_system(t, P, k_cis, k_photo, True),
-            (light_on_time, light_off_time),
-            P_at_light_on, method='RK45', dense_output=True, rtol=1e-6, atol=1e-9
-        )
+        # --- 3. Loop through the provided light schedule ---
+        for end_time, light_condition in light_schedule:
+            # Ensure the schedule does not exceed the total simulation time
+            if current_time >= total_sim_time:
+                break
 
-        # --- Simulation after light is off ---
-        P_at_light_off = sol_light_on.y[:, -1]
-        sol_after = solve_ivp(
-            lambda t, P: self._ode_system(t, P, k_trans, k_photo, False),
-            (light_off_time, t_span[1]),
-            P_at_light_off, method='RK45', dense_output=True, rtol=1e-6, atol=1e-9
-        )
+            segment_end_time = min(end_time, total_sim_time)
 
-        # --- Combine results ---
-        t_combined = np.concatenate((sol_before.t, sol_light_on.t, sol_after.t))
-        P_combined = np.hstack((sol_before.y, sol_light_on.y, sol_after.y))
+            # Skip if this segment has zero or negative duration
+            if segment_end_time <= current_time:
+                continue
 
-        # Sort by time to ensure monotonicity
-        sort_indices = np.argsort(t_combined)
-        t_combined = t_combined[sort_indices]
-        P_combined = P_combined[:, sort_indices]
+            # Select the appropriate rate matrix and light flag for the segment
+            if light_condition.lower() == 'uv':
+                k_matrix = k_cis
+                is_light_on = True
+            else:  # 'visible' or 'dark'
+                k_matrix = k_trans
+                is_light_on = False
+
+            # --- 4. Run the ODE solver for the current segment ---
+            sol = solve_ivp(
+                lambda t, P: self._ode_system(t, P, k_matrix, k_photo, is_light_on),
+                (current_time, segment_end_time),
+                current_P,
+                method='RK45', dense_output=True, rtol=1e-6, atol=1e-9
+            )
+
+            # --- 5. Store results and update state for the next segment ---
+            if sol.success and len(sol.t) > 1:
+                # Append results, excluding the first point which is a duplicate of the previous end
+                all_times.append(sol.t[1:])
+                all_probs.append(sol.y[:, 1:])
+
+                # Update current state
+                current_time = sol.t[-1]
+                current_P = sol.y[:, -1]
+
+        # --- 6. Combine and format the final results ---
+        t_combined = np.concatenate(all_times)
+        P_combined = np.hstack(all_probs)
 
         sim_df = pd.DataFrame(P_combined.T, columns=[f'P_{i}' for i in range(self.num_configs)])
         sim_df['Time'] = t_combined
