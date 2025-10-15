@@ -11,7 +11,7 @@ import math
 
 
 class NanorobotSolver:
-    def __init__(self, model_name, config_names_str, experimental_data_path_a):
+    def __init__(self, model_name, experimental_data_path_a):
         self.model_name = model_name
         self.num_configs = 14
         self.config_names = [f"State_{i}" for i in range(self.num_configs)]
@@ -521,7 +521,6 @@ class NanorobotSolver:
 
         return sim_df
 
-    # ==================== MODIFIED: 全面修改奖励函数以包含归一化 ====================
     def evaluate_model(self, simulated_data_df, reward_flag=0):
         if reward_flag == 0:
             # 初始检查仍然保留，但我们会添加更具体的检查
