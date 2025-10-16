@@ -60,7 +60,7 @@ def reward_func(weights, mlp_model):
 
     rewards = []
     # 每次评估生成一组参数并模拟，重复num_evals次取平均
-    num_evaluations = 1
+    num_evaluations = 5
     for _ in range(num_evaluations):
         # 生成参数：MLP以随机噪声为输入，输出一个参数数组
         # noise_input 应该是一个 PyTorch tensor

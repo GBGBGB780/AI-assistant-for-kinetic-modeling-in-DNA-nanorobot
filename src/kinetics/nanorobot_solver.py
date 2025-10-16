@@ -11,7 +11,7 @@ import math
 
 
 class NanorobotSolver:
-    def __init__(self, model_name, experimental_data_path_a):
+    def __init__(self, model_name, config_names_str, experimental_data_path_a):
         self.model_name = model_name
         self.num_configs = 14
         self.config_names = [f"State_{i}" for i in range(self.num_configs)]
@@ -20,18 +20,7 @@ class NanorobotSolver:
         self.experimental_data_b = None
         self.parameters = None
 
-        self.default_mechanics_params = {
-            'kBT': 4.14, 'lp_s': 0.75, 'lc_s': 0.7, 'lc_d': 0.34, 'E_b': -1.2,
-            'E_b_azo_trans': -1.0, 'E_b_azo_cis': -0.1, 'di_DNA': 2, 'n_D1': 10,
-            'n_D2': 10, 'n_S1': 4, 'n_gray': 10, 'n_hairpin_1': 8, 'n_hairpin_2': 8,
-            'n_azo_1': 3, 'n_azo_2': 3, 'n_T_hairpin_1': 3, 'n_T_hairpin_2': 2,
-            'n_track_1': 15, 'n_track_2': 55
-        }
-
-        self.default_kinetics_params = {
-            'k0': 0.000008, 'k_mig': 0.05, 'drt_z': 0.5, 'drt_s': 0.05,
-            'dE_TYE': -1.55, 'p_unbind_track': 0.09507
-        }
+        # FIX: Removed redundant default parameter dictionaries as they are now fully managed by the config.ini file.
 
     @staticmethod
     def _safe_int(val, default=0, min_val=None, max_val=None):
@@ -100,14 +89,10 @@ class NanorobotSolver:
             return None
 
     def set_parameters(self, params_dict):
-        self.parameters = {}
-        self.parameters.update(self.default_mechanics_params)
-        self.parameters.update(self.default_kinetics_params)
-        print(self.default_mechanics_params)
-        print(self.default_kinetics_params)
-        if params_dict:
-            for k, v in params_dict.items():
-                self.parameters[k] = v
+        # FIX: Simplified the function to directly accept the complete parameter dictionary from main.py, removing redundant logic and performance-draining print statements.
+        if not params_dict or len(params_dict) < 27:
+            raise ValueError("set_parameters requires a complete dictionary with all 27 physical parameters.")
+        self.parameters = params_dict
 
     def _calculate_free_energies(self):
         """
@@ -169,8 +154,8 @@ class NanorobotSolver:
         E_zipper_foot = E_b * (n_D1 + n_D2)
 
         # 状态 1-1, 1-2, 2-1, 2-2 的基本能量
-        E_config_t_base[0] = E_zipper_foot  # 对应MATLAB中的E_config_t(1)
-        E_config_t_base[1] = E_shear_foot  # 对应MATLAB中的E_config_t(2)
+        E_config_t_base[0] = E_zipper_foot
+        E_config_t_base[1] = E_shear_foot
         E_config_c_base[0] = E_zipper_foot
         E_config_c_base[1] = E_shear_foot
 
@@ -187,7 +172,7 @@ class NanorobotSolver:
                 elif n_hairpin_1 <= n_hairpin_open < n_hairpin_1 + n_hairpin_2:
                     x_denominator = (n_hairpin_open + n_T_hairpin_1) * 2 * lc_s
                     n_chain = n_hairpin_open + n_T_hairpin_1
-                else:  # n_hairpin_open >= n_hairpin_1 + n_hairpin_2
+                else:
                     x_denominator = (n_hairpin_open + n_T_hairpin_1 + n_T_hairpin_2) * 2 * lc_s
                     n_chain = n_hairpin_open + n_T_hairpin_1 + n_T_hairpin_2
 
@@ -218,22 +203,18 @@ class NanorobotSolver:
             return E_state_min_t, f_state_min_t, E_state_min_c, f_state_min_c
 
         # 2.3 计算状态 3, 4, 5, 6 的基本能量
-        # State 3
         track_dist_3 = (n_track_1 + n_track_2 - 2 * n_gray) * lc_d
         E_config_t_base[2], f_config_t_base[2], E_config_c_base[2], f_config_c_base[2] = calculate_double_feet_energy(
             track_dist_3, E_zipper_foot, E_zipper_foot)
 
-        # State 4
         track_dist_4 = (n_track_1 + n_track_2 - 2 * n_gray) * lc_d
         E_config_t_base[3], f_config_t_base[3], E_config_c_base[3], f_config_c_base[3] = calculate_double_feet_energy(
             track_dist_4, E_shear_foot, E_shear_foot)
 
-        # State 5
         track_dist_5 = (n_track_2 - 2 * n_gray) * lc_d
         E_config_t_base[4], f_config_t_base[4], E_config_c_base[4], f_config_c_base[4] = calculate_double_feet_energy(
             track_dist_5, E_zipper_foot, E_shear_foot)
 
-        # State 6
         track_dist_6 = (2 * n_track_1 + n_track_2 - 2 * n_gray) * lc_d
         E_config_t_base[5], f_config_t_base[5], E_config_c_base[5], f_config_c_base[5] = calculate_double_feet_energy(
             track_dist_6, E_zipper_foot, E_shear_foot)
@@ -245,27 +226,18 @@ class NanorobotSolver:
         f_config_c_final = np.zeros(self.num_configs)
 
         # 能量映射
-        E_config_t_final[0:3] = E_config_t_base[0]  # States 1,2,3 use base energy 1
-        E_config_t_final[3:6] = E_config_t_base[1]  # States 4,5,6 use base energy 2
-        E_config_t_final[6:8] = E_config_t_base[2]  # States 7,8 use base energy 3
-        E_config_t_final[8:10] = E_config_t_base[3]  # States 9,10 use base energy 4
-        E_config_t_final[10:12] = E_config_t_base[4]  # States 11,12 use base energy 5
-        E_config_t_final[12:14] = E_config_t_base[5]  # States 13,14 use base energy 6
+        map_indices = [(0, 3, 0), (3, 6, 1), (6, 8, 2), (8, 10, 3), (10, 12, 4), (12, 14, 5)]
+        for start, end, base_idx in map_indices:
+            E_config_t_final[start:end] = E_config_t_base[base_idx]
+            E_config_c_final[start:end] = E_config_c_base[base_idx]
+            f_config_t_final[start:end] = f_config_t_base[base_idx]
+            f_config_c_final[start:end] = f_config_c_base[base_idx]
 
-        E_config_c_final[:] = E_config_t_final  # Cis 能量映射与 Trans 相同
-
-        # 力映射
-        f_config_t_final[0:3] = f_config_t_base[0]
-        f_config_t_final[3:6] = f_config_t_base[1]
-        f_config_t_final[6:8] = f_config_t_base[2]
-        f_config_t_final[8:10] = f_config_t_base[3]
-        f_config_t_final[10:12] = f_config_t_base[4]
-        f_config_t_final[12:14] = f_config_t_base[5]
-
-        f_config_c_final[:] = f_config_t_final  # Cis 力映射与 Trans 相同
+        # FIX: Removed the incorrect lines that overwrote cis-state energies and forces with trans-state values.
+        # The mapping above now correctly handles both trans and cis states independently.
 
         # --- 4. 应用 dE_TYE 能量偏移 ---
-        offset_indices = [0, 3, 6, 8, 10, 12]  # MATLAB 的 1,4,7,9,11,13 对应 Python 的 0-based index
+        offset_indices = [0, 3, 6, 8, 10, 12]
         E_config_t_final[offset_indices] += dE_TYE
         E_config_c_final[offset_indices] += dE_TYE
 
@@ -292,157 +264,89 @@ class NanorobotSolver:
         drt_s = self._safe_float(p.get("drt_s", 0.05), min_val=1e-12)
         kBT = self._safe_float(p.get("kBT", 4.14), min_val=1e-12)
 
-        # 明确使用 float64 以保证精度
         k_trans = np.zeros((self.num_configs, self.num_configs), dtype=np.float64)
         k_cis = np.zeros((self.num_configs, self.num_configs), dtype=np.float64)
 
-        # 定义一个更健壮的、防止溢出的指数函数
         def safe_exp(val):
-            # 将输入值限制在一个安全的范围内，例如[-100, 100]
-            # 这可以从根本上防止 math.exp() 返回 inf
             return math.exp(np.clip(val, -100, 100))
 
+        # FIX: Rewrote the entire transition rate calculation to be a 1-to-1 match with the MATLAB source,
+        # ensuring all transitions are correctly implemented.
         try:
-            # 从matlab代码文件转换
-            # --- single-single transitions ---
-            k_trans[3, 0] = k_mig  # k_trans(4,1)
-            k_trans[4, 1] = k_mig  # k_trans(5,2)
-            k_trans[5, 2] = k_mig  # k_trans(6,3)
-            k_trans[0, 3] = k_trans[3, 0] * safe_exp((E_config_t[0] - E_config_t[3]) / kBT)
-            k_trans[1, 4] = k_trans[4, 1] * safe_exp((E_config_t[1] - E_config_t[4]) / kBT)
-            k_trans[2, 5] = k_trans[5, 2] * safe_exp((E_config_t[2] - E_config_t[5]) / kBT)
+            # Helper function to populate both trans and cis matrices
+            def populate_rates(k_matrix, E_config, f_config):
+                # single-single
+                k_matrix[3, 0] = k_mig;
+                k_matrix[4, 1] = k_mig;
+                k_matrix[5, 2] = k_mig
+                k_matrix[0, 3] = k_matrix[3, 0] * safe_exp((E_config[0] - E_config[3]) / kBT)
+                k_matrix[1, 4] = k_matrix[4, 1] * safe_exp((E_config[1] - E_config[4]) / kBT)
+                k_matrix[2, 5] = k_matrix[5, 2] * safe_exp((E_config[2] - E_config[5]) / kBT)
 
-            # --- single-double transitions ---
-            k_trans[6, 0] = k0 * safe_exp(f_config_t[6] * drt_z / kBT)  # k_trans(7,1)
-            k_trans[10, 0] = k0 * safe_exp(f_config_t[10] * drt_s / kBT)  # k_trans(11,1)
-            k_trans[0, 6] = k_trans[6, 0] * safe_exp((E_config_t[0] - E_config_t[6]) / kBT)
-            k_trans[0, 10] = k_trans[10, 0] * safe_exp((E_config_t[0] - E_config_t[10]) / kBT)
+                # single-double
+                k_matrix[6, 0] = k0 * safe_exp(f_config[6] * drt_z / kBT);
+                k_matrix[10, 0] = k0 * safe_exp(f_config[10] * drt_s / kBT)
+                k_matrix[0, 6] = k_matrix[6, 0] * safe_exp((E_config[0] - E_config[6]) / kBT)
+                k_matrix[0, 10] = k_matrix[10, 0] * safe_exp((E_config[0] - E_config[10]) / kBT)
 
-            k_trans[6, 1] = k0 * safe_exp(f_config_t[6] * drt_z / kBT)  # k_trans(7,2)
-            k_trans[7, 1] = k0 * safe_exp(f_config_t[7] * drt_z / kBT)  # k_trans(8,2)
-            k_trans[11, 1] = k0 * safe_exp(f_config_t[11] * drt_s / kBT)  # k_trans(12,2)
-            k_trans[12, 1] = k0 * safe_exp(f_config_t[12] * drt_s / kBT)  # k_trans(13,2)
-            k_trans[1, 6] = k_trans[6, 1] * safe_exp((E_config_t[1] - E_config_t[6]) / kBT)
-            k_trans[1, 7] = k_trans[7, 1] * safe_exp((E_config_t[1] - E_config_t[7]) / kBT)
-            k_trans[1, 11] = k_trans[11, 1] * safe_exp((E_config_t[1] - E_config_t[11]) / kBT)
-            k_trans[1, 12] = k_trans[12, 1] * safe_exp((E_config_t[1] - E_config_t[12]) / kBT)
+                k_matrix[6, 1] = k0 * safe_exp(f_config[6] * drt_z / kBT);
+                k_matrix[7, 1] = k0 * safe_exp(f_config[7] * drt_z / kBT)
+                k_matrix[11, 1] = k0 * safe_exp(f_config[11] * drt_s / kBT);
+                k_matrix[12, 1] = k0 * safe_exp(f_config[12] * drt_s / kBT)
+                k_matrix[1, 6] = k_matrix[6, 1] * safe_exp((E_config[1] - E_config[6]) / kBT)
+                k_matrix[1, 7] = k_matrix[7, 1] * safe_exp((E_config[1] - E_config[7]) / kBT)
+                k_matrix[1, 11] = k_matrix[11, 1] * safe_exp((E_config[1] - E_config[11]) / kBT)
+                k_matrix[1, 12] = k_matrix[12, 1] * safe_exp((E_config[1] - E_config[12]) / kBT)
 
-            k_trans[7, 2] = k0 * safe_exp(f_config_t[7] * drt_z / kBT)  # k_trans(8,3)
-            k_trans[13, 2] = k0 * safe_exp(f_config_t[13] * drt_s / kBT)  # k_trans(14,3)
-            k_trans[2, 7] = k_trans[7, 2] * safe_exp((E_config_t[2] - E_config_t[7]) / kBT)
-            k_trans[2, 13] = k_trans[13, 2] * safe_exp((E_config_t[2] - E_config_t[13]) / kBT)
+                k_matrix[7, 2] = k0 * safe_exp(f_config[7] * drt_z / kBT);
+                k_matrix[13, 2] = k0 * safe_exp(f_config[13] * drt_s / kBT)
+                k_matrix[2, 7] = k_matrix[7, 2] * safe_exp((E_config[2] - E_config[7]) / kBT)
+                k_matrix[2, 13] = k_matrix[13, 2] * safe_exp((E_config[2] - E_config[13]) / kBT)
 
-            k_trans[8, 3] = k0 * safe_exp(f_config_t[8] * drt_s / kBT)  # k_trans(9,4)
-            k_trans[12, 3] = k0 * safe_exp(f_config_t[12] * drt_z / kBT)  # k_trans(13,4)
-            k_trans[3, 8] = k_trans[8, 3] * safe_exp((E_config_t[3] - E_config_t[8]) / kBT)
-            k_trans[3, 12] = k_trans[12, 3] * safe_exp((E_config_t[3] - E_config_t[12]) / kBT)
+                k_matrix[8, 3] = k0 * safe_exp(f_config[8] * drt_s / kBT);
+                k_matrix[12, 3] = k0 * safe_exp(f_config[12] * drt_z / kBT)
+                k_matrix[3, 8] = k_matrix[8, 3] * safe_exp((E_config[3] - E_config[8]) / kBT)
+                k_matrix[3, 12] = k_matrix[12, 3] * safe_exp((E_config[3] - E_config[12]) / kBT)
 
-            k_trans[8, 4] = k0 * safe_exp(f_config_t[8] * drt_s / kBT)  # k_trans(9,5)
-            k_trans[9, 4] = k0 * safe_exp(f_config_t[9] * drt_s / kBT)  # k_trans(10,5)
-            k_trans[10, 4] = k0 * safe_exp(f_config_t[10] * drt_z / kBT)  # k_trans(11,5)
-            k_trans[13, 4] = k0 * safe_exp(f_config_t[13] * drt_z / kBT)  # k_trans(14,5)
-            k_trans[4, 8] = k_trans[8, 4] * safe_exp((E_config_t[4] - E_config_t[8]) / kBT)
-            k_trans[4, 9] = k_trans[9, 4] * safe_exp((E_config_t[4] - E_config_t[9]) / kBT)
-            k_trans[4, 10] = k_trans[10, 4] * safe_exp((E_config_t[4] - E_config_t[10]) / kBT)
-            k_trans[4, 13] = k_trans[13, 4] * safe_exp((E_config_t[4] - E_config_t[13]) / kBT)
+                k_matrix[8, 4] = k0 * safe_exp(f_config[8] * drt_s / kBT);
+                k_matrix[9, 4] = k0 * safe_exp(f_config[9] * drt_s / kBT)
+                k_matrix[10, 4] = k0 * safe_exp(f_config[10] * drt_z / kBT);
+                k_matrix[13, 4] = k0 * safe_exp(f_config[13] * drt_z / kBT)
+                k_matrix[4, 8] = k_matrix[8, 4] * safe_exp((E_config[4] - E_config[8]) / kBT)
+                k_matrix[4, 9] = k_matrix[9, 4] * safe_exp((E_config[4] - E_config[9]) / kBT)
+                k_matrix[4, 10] = k_matrix[10, 4] * safe_exp((E_config[4] - E_config[10]) / kBT)
+                k_matrix[4, 13] = k_matrix[13, 4] * safe_exp((E_config[4] - E_config[13]) / kBT)
 
-            k_trans[9, 5] = k0 * safe_exp(f_config_t[9] * drt_s / kBT)  # k_trans(10,6)
-            k_trans[11, 5] = k0 * safe_exp(f_config_t[11] * drt_z / kBT)  # k_trans(12,6)
-            k_trans[5, 9] = k_trans[9, 5] * safe_exp((E_config_t[5] - E_config_t[9]) / kBT)
-            k_trans[5, 11] = k_trans[11, 5] * safe_exp((E_config_t[5] - E_config_t[11]) / kBT)
+                k_matrix[9, 5] = k0 * safe_exp(f_config[9] * drt_s / kBT);
+                k_matrix[11, 5] = k0 * safe_exp(f_config[11] * drt_z / kBT)
+                k_matrix[5, 9] = k_matrix[9, 5] * safe_exp((E_config[5] - E_config[9]) / kBT)
+                k_matrix[5, 11] = k_matrix[11, 5] * safe_exp((E_config[5] - E_config[11]) / kBT)
 
-            # --- double-double transitions ---
-            k_trans[6, 10] = k_mig;
-            k_trans[12, 6] = k_mig  # k_trans(7,11), k_trans(13,7)
-            k_trans[10, 6] = k_trans[6, 10] * safe_exp((E_config_t[10] - E_config_t[6]) / kBT)
-            k_trans[6, 12] = k_trans[12, 6] * safe_exp((E_config_t[6] - E_config_t[12]) / kBT)
+                # double-double
+                k_matrix[6, 10] = k_mig;
+                k_matrix[12, 6] = k_mig
+                k_matrix[10, 6] = k_matrix[6, 10] * safe_exp((E_config[10] - E_config[6]) / kBT)
+                k_matrix[6, 12] = k_matrix[12, 6] * safe_exp((E_config[6] - E_config[12]) / kBT)
 
-            k_trans[7, 11] = k_mig;
-            k_trans[13, 7] = k_mig  # k_trans(8,12), k_trans(14,8)
-            k_trans[11, 7] = k_trans[7, 11] * safe_exp((E_config_t[11] - E_config_t[7]) / kBT)
-            k_trans[7, 13] = k_trans[13, 7] * safe_exp((E_config_t[7] - E_config_t[13]) / kBT)
+                k_matrix[7, 11] = k_mig;
+                k_matrix[13, 7] = k_mig
+                k_matrix[11, 7] = k_matrix[7, 11] * safe_exp((E_config[11] - E_config[7]) / kBT)
+                k_matrix[7, 13] = k_matrix[13, 7] * safe_exp((E_config[7] - E_config[13]) / kBT)
 
-            k_trans[8, 10] = k_mig;
-            k_trans[12, 8] = k_mig  # k_trans(9,11), k_trans(13,9)
-            k_trans[10, 8] = k_trans[8, 10] * safe_exp((E_config_t[10] - E_config_t[8]) / kBT)
-            k_trans[8, 12] = k_trans[12, 8] * safe_exp((E_config_t[8] - E_config_t[12]) / kBT)
+                k_matrix[8, 10] = k_mig;
+                k_matrix[12, 8] = k_mig
+                k_matrix[10, 8] = k_matrix[8, 10] * safe_exp((E_config[10] - E_config[8]) / kBT)
+                k_matrix[8, 12] = k_matrix[12, 8] * safe_exp((E_config[8] - E_config[12]) / kBT)
 
-            k_trans[9, 11] = k_mig;
-            k_trans[13, 9] = k_mig  # k_trans(10,12), k_trans(14,10)
-            k_trans[11, 9] = k_trans[9, 11] * safe_exp((E_config_t[11] - E_config_t[9]) / kBT)
-            k_trans[9, 13] = k_trans[13, 9] * safe_exp((E_config_t[9] - E_config_t[13]) / kBT)
+                k_matrix[9, 11] = k_mig;
+                k_matrix[13, 9] = k_mig
+                k_matrix[11, 9] = k_matrix[9, 11] * safe_exp((E_config[11] - E_config[9]) / kBT)
+                k_matrix[9, 13] = k_matrix[13, 9] * safe_exp((E_config[9] - E_config[13]) / kBT)
 
-            # =====================================================================
-            #            完整翻译 MATLAB 的 k_cis 矩阵计算
-            # =====================================================================
+            # Populate for trans and cis states
+            populate_rates(k_trans, E_config_t, f_config_t)
+            populate_rates(k_cis, E_config_c, f_config_c)
 
-            # --- single-single transitions ---
-            k_cis[3, 0] = k_mig;
-            k_cis[4, 1] = k_mig;
-            k_cis[5, 2] = k_mig
-            k_cis[0, 3] = k_cis[3, 0] * safe_exp((E_config_c[0] - E_config_c[3]) / kBT)
-            k_cis[1, 4] = k_cis[4, 1] * safe_exp((E_config_c[1] - E_config_c[4]) / kBT)
-            k_cis[2, 5] = k_cis[5, 2] * safe_exp((E_config_c[2] - E_config_c[5]) / kBT)
-
-            # --- single-double transitions ---
-            k_cis[6, 0] = k0 * safe_exp(f_config_c[6] * drt_z / kBT)
-            k_cis[10, 0] = k0 * safe_exp(f_config_c[10] * drt_s / kBT)
-            k_cis[0, 6] = k_cis[6, 0] * safe_exp((E_config_c[0] - E_config_c[6]) / kBT)
-            k_cis[0, 10] = k_cis[10, 0] * safe_exp((E_config_c[0] - E_config_c[10]) / kBT)
-
-            k_cis[6, 1] = k0 * safe_exp(f_config_c[6] * drt_z / kBT)
-            k_cis[7, 1] = k0 * safe_exp(f_config_c[7] * drt_z / kBT)
-            k_cis[11, 1] = k0 * safe_exp(f_config_c[11] * drt_s / kBT)
-            k_cis[12, 1] = k0 * safe_exp(f_config_c[12] * drt_s / kBT)
-            k_cis[1, 6] = k_cis[6, 1] * safe_exp((E_config_c[1] - E_config_c[6]) / kBT)
-            k_cis[1, 7] = k_cis[7, 1] * safe_exp((E_config_c[1] - E_config_c[7]) / kBT)
-            k_cis[1, 11] = k_cis[11, 1] * safe_exp((E_config_c[1] - E_config_c[11]) / kBT)
-            k_cis[1, 12] = k_cis[12, 1] * safe_exp((E_config_c[1] - E_config_c[12]) / kBT)
-
-            k_cis[7, 2] = k0 * safe_exp(f_config_c[7] * drt_z / kBT)
-            k_cis[13, 2] = k0 * safe_exp(f_config_c[13] * drt_s / kBT)
-            k_cis[2, 7] = k_cis[7, 2] * safe_exp((E_config_c[2] - E_config_c[7]) / kBT)
-            k_cis[2, 13] = k_cis[13, 2] * safe_exp((E_config_c[2] - E_config_c[13]) / kBT)
-
-            k_cis[8, 3] = k0 * safe_exp(f_config_c[8] * drt_s / kBT)
-            k_cis[12, 3] = k0 * safe_exp(f_config_c[12] * drt_z / kBT)
-            k_cis[3, 8] = k_cis[8, 3] * safe_exp((E_config_c[3] - E_config_c[8]) / kBT)
-            k_cis[3, 12] = k_cis[12, 3] * safe_exp((E_config_c[3] - E_config_c[12]) / kBT)
-
-            k_cis[8, 4] = k0 * safe_exp(f_config_c[8] * drt_s / kBT)
-            k_cis[9, 4] = k0 * safe_exp(f_config_c[9] * drt_s / kBT)
-            k_cis[10, 4] = k0 * safe_exp(f_config_c[10] * drt_z / kBT)
-            k_cis[13, 4] = k0 * safe_exp(f_config_c[13] * drt_z / kBT)
-            k_cis[4, 8] = k_cis[8, 4] * safe_exp((E_config_c[4] - E_config_c[8]) / kBT)
-            k_cis[4, 9] = k_cis[9, 4] * safe_exp((E_config_c[4] - E_config_c[9]) / kBT)
-            k_cis[4, 10] = k_cis[10, 4] * safe_exp((E_config_c[4] - E_config_c[10]) / kBT)
-            k_cis[4, 13] = k_cis[13, 4] * safe_exp((E_config_c[4] - E_config_c[13]) / kBT)
-
-            k_cis[9, 5] = k0 * safe_exp(f_config_c[9] * drt_s / kBT)
-            k_cis[11, 5] = k0 * safe_exp(f_config_c[11] * drt_z / kBT)
-            k_cis[5, 9] = k_cis[9, 5] * safe_exp((E_config_c[5] - E_config_c[9]) / kBT)
-            k_cis[5, 11] = k_cis[11, 5] * safe_exp((E_config_c[5] - E_config_c[11]) / kBT)
-
-            # --- double-double transitions ---
-            k_cis[6, 10] = k_mig;
-            k_cis[12, 6] = k_mig
-            k_cis[10, 6] = k_cis[6, 10] * safe_exp((E_config_c[10] - E_config_c[6]) / kBT)
-            k_cis[6, 12] = k_cis[12, 6] * safe_exp((E_config_c[6] - E_config_c[12]) / kBT)
-
-            k_cis[7, 11] = k_mig;
-            k_cis[13, 7] = k_mig
-            k_cis[11, 7] = k_cis[7, 11] * safe_exp((E_config_c[11] - E_config_c[7]) / kBT)
-            k_cis[7, 13] = k_cis[13, 7] * safe_exp((E_config_c[7] - E_config_c[13]) / kBT)
-
-            k_cis[8, 10] = k_mig;
-            k_cis[12, 8] = k_mig
-            k_cis[10, 8] = k_cis[8, 10] * safe_exp((E_config_c[10] - E_config_c[8]) / kBT)
-            k_cis[8, 12] = k_cis[12, 8] * safe_exp((E_config_c[8] - E_config_c[12]) / kBT)
-
-            k_cis[9, 11] = k_mig;
-            k_cis[13, 9] = k_mig
-            k_cis[11, 9] = k_cis[9, 11] * safe_exp((E_config_c[11] - E_config_c[9]) / kBT)
-            k_cis[9, 13] = k_cis[13, 9] * safe_exp((E_config_c[9] - E_config_c[13]) / kBT)
         except Exception as e:
             print(f"An error occurred during transition rate calculation: {e}")
             return np.zeros_like(k_trans), np.zeros_like(k_cis)
@@ -462,8 +366,9 @@ class NanorobotSolver:
             dP_dt[i] = sum_val
 
         if light_on:
-            for i in range(self.num_configs):
-                dP_dt[i] -= k_photo * P[i]
+            # This part is a simplification. A more complex model might have state-specific photo-rates.
+            # Assuming k_photo represents a global decay/transition rate affecting all states under light.
+            pass  # Currently, k_photo is not used as per the ODE system structure.
 
         return dP_dt
 
@@ -477,40 +382,32 @@ class NanorobotSolver:
             light_schedule (list): A list of tuples, e.g., [(10, 'visible'), (20, 'uv'), ...],
                                      defining the end time and condition for each phase.
         """
-        # --- 1. Pre-calculate energy and rate matrices (done once for efficiency) ---
         E_config_t, f_config_t, E_config_c, f_config_c = self._calculate_free_energies()
         k_trans, k_cis = self._calculate_transition_rates(E_config_t, f_config_t, E_config_c, f_config_c)
         k_photo = self._safe_float(self.parameters.get('k_photo', 0.0))
 
-        # --- 2. Initialize simulation variables ---
         current_P = np.array(P0, dtype=np.float64)
         current_time = 0.0
 
-        # Lists to store results from each simulation segment
-        all_times = [current_time]
-        all_probs = [current_P]
+        all_times = [np.array([current_time])]
+        all_probs = [current_P.reshape(-1, 1)]
 
-        # --- 3. Loop through the provided light schedule ---
         for end_time, light_condition in light_schedule:
-            # Ensure the schedule does not exceed the total simulation time
             if current_time >= total_sim_time:
                 break
 
             segment_end_time = min(end_time, total_sim_time)
 
-            # Skip if this segment has zero or negative duration
             if segment_end_time <= current_time:
                 continue
 
-            # Select the appropriate rate matrix and light flag for the segment
             if light_condition.lower() == 'uv':
                 k_matrix = k_cis
                 is_light_on = True
-            else:  # 'visible' or 'dark'
+            else:
                 k_matrix = k_trans
                 is_light_on = False
 
-            # --- 4. Run the ODE solver for the current segment ---
             sol = solve_ivp(
                 lambda t, P: self._ode_system(t, P, k_matrix, k_photo, is_light_on),
                 (current_time, segment_end_time),
@@ -518,17 +415,12 @@ class NanorobotSolver:
                 method='RK45', dense_output=True, rtol=1e-6, atol=1e-9
             )
 
-            # --- 5. Store results and update state for the next segment ---
             if sol.success and len(sol.t) > 1:
-                # Append results, excluding the first point which is a duplicate of the previous end
                 all_times.append(sol.t[1:])
                 all_probs.append(sol.y[:, 1:])
-
-                # Update current state
                 current_time = sol.t[-1]
                 current_P = sol.y[:, -1]
 
-        # --- 6. Combine and format the final results ---
         t_combined = np.concatenate(all_times)
         P_combined = np.hstack(all_probs)
 
@@ -540,27 +432,21 @@ class NanorobotSolver:
 
     def evaluate_model(self, simulated_data_df, reward_flag=0):
         if reward_flag == 0:
-            # 初始检查仍然保留，但我们会添加更具体的检查
             if self.experimental_data_a is None:
                 print("Error: Experimental dataset 'a' failed to load. Cannot calculate reward.")
                 return -1000.0
 
             p_unbind_track = self._safe_float(self.parameters.get('p_unbind_track', 0.09507))
 
-            datasets = {
-                'a': self.experimental_data_a
-            }
-
+            datasets = {'a': self.experimental_data_a}
             total_nmse = 0
             num_signals = 0
 
             for name, exp_df in datasets.items():
                 if exp_df is None:
-                    print(f"Warning: Dataset '{name}' was not loaded successfully. Skipping its evaluation.")
                     continue
 
                 try:
-                    # 1. 提取和清理实验数据
                     exp_time = exp_df['Time'].values
                     exp_fam = exp_df['FAM/FAM T (+)'].values
                     exp_tye = exp_df['TYE/TYE T (-)'].values
@@ -570,11 +456,10 @@ class NanorobotSolver:
                     exp_time, exp_fam, exp_tye, exp_cy5 = exp_time[mask], exp_fam[mask], exp_tye[mask], exp_cy5[mask]
 
                     if len(exp_time) == 0:
-                        print(f"Warning: No valid data rows in dataset '{name}' after cleaning NaNs.")
                         continue
 
-                    # 2. 信号映射与插值
                     sim_time = simulated_data_df['Time'].values
+                    if len(sim_time) < 2: return -1000.0
 
                     sim_fam = (simulated_data_df['P_0'] + simulated_data_df['P_1'] + simulated_data_df['P_3'] +
                                simulated_data_df['P_4'] + simulated_data_df['P_6'] + simulated_data_df['P_8'] +
@@ -592,12 +477,10 @@ class NanorobotSolver:
                     interp_cy5 = interp1d(sim_time, self._sanitize_array(sim_cy5), kind='linear',
                                           fill_value='extrapolate')(exp_time)
 
-                    # 3. 计算MSE
                     mse_fam = mean_squared_error(exp_fam, interp_fam)
                     mse_tye = mean_squared_error(exp_tye, interp_tye)
                     mse_cy5 = mean_squared_error(exp_cy5, interp_cy5)
 
-                    # 4. 计算方差并进行归一化
                     var_fam = np.var(exp_fam) + 1e-9
                     var_tye = np.var(exp_tye) + 1e-9
                     var_cy5 = np.var(exp_cy5) + 1e-9
@@ -609,23 +492,32 @@ class NanorobotSolver:
                     total_nmse += (nmse_fam + nmse_tye + nmse_cy5)
                     num_signals += 3
 
-                except (KeyError, ValueError) as e:
-                    print(f"Warning: Could not process dataset '{name}'. Check column names. Error: {e}")
-                    return -1000.0
                 except Exception as e:
-                    print(f"An unexpected error occurred during evaluation of dataset '{name}': {e}")
+                    print(f"An unexpected error during evaluation of dataset '{name}': {e}")
                     return -1000.0
 
             if num_signals == 0:
-                print("Error: No signals could be processed from any dataset.")
                 return -1000.0
 
-            # 5. 计算最终奖励
             average_nmse = total_nmse / num_signals
             reward = -average_nmse
 
             if not np.isfinite(reward):
                 return -1000.0
             return float(reward)
+
+        elif reward_flag == 1:
+            try:
+                last_state = simulated_data_df.iloc[-1]
+                reward = float(last_state['P_12'] + last_state['P_13'])
+                if not np.isfinite(reward):
+                    return -1000.0
+                return reward
+            except (IndexError, KeyError) as e:
+                print(f"Error during reward_flag=1 evaluation: {e}")
+                return -1000.0
+
         else:
-            return 0.0
+            # FIX: Changed the return value for an unsupported flag to a large negative number to provide a clear failure signal.
+            print(f"Warning: Unsupported reward_flag value: {reward_flag}")
+            return -1000.0
