@@ -36,7 +36,6 @@ if config.has_section('TRAINING_PARAMETER_RANGES'):
         min_val, max_val = [float(x.strip()) for x in value.split(',')]
         param_ranges[name] = (min_val, max_val)
 
-MODEL_NAME = config["PATHS"]["robot_model"]
 OUTPUT_PATH = config["PATHS"]["output_path"]
 EXP_DATA_PATH_A = config["NANOROBOT_MODELING"]["path_to_experimental_data_a"]
 SIM_TOTAL_TIME = float(config["NANOROBOT_MODELING"]["sim_total_time"])
@@ -47,7 +46,7 @@ CYCLE_DURATION_VIS = float(config["NANOROBOT_MODELING"]["cycle_duration_vis"])
 CYCLE_DURATION_UV = float(config["NANOROBOT_MODELING"]["cycle_duration_uv"])
 LIGHT_START_MODE = int(config["NANOROBOT_MODELING"]["light_start_mode"])
 # 加载纳米机器人动力学求解器 (模拟与评估)
-nanorobot_solver = NanorobotSolver(MODEL_NAME, EXP_DATA_PATH_A)
+nanorobot_solver = NanorobotSolver(fixed_params, EXP_DATA_PATH_A)
 
 
 def reward_func(weights, mlp_model):
