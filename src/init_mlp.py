@@ -46,6 +46,7 @@ class MLP(nn.Module):
 
         # Êä³ö²ã
         layers.append(nn.Linear(hidden_sizes[-1], output_size))
+        layers.append(nn.Tanh())
 
         self.model = nn.Sequential(*layers).to(self.device)
 
