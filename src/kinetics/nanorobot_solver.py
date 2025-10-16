@@ -180,11 +180,8 @@ class NanorobotSolver:
                 else:
                     E_neck, f_state = 1000.0, 1000.0
 
-                # ***** CORRECTED THIS SECTION *****
-                # The factor of 2 was missing from the azo energy term.
                 E_state_t = E_neck + E_foot1 + E_foot2 - 2 * n_hairpin_open * E_b_azo_trans
                 E_state_c = E_neck + E_foot1 + E_foot2 - 2 * n_hairpin_open * E_b_azo_cis
-                # ***********************************
 
                 if E_state_min_t > E_state_t:
                     E_state_min_t = E_state_t
@@ -216,28 +213,26 @@ class NanorobotSolver:
         f_config_t_final = np.zeros(self.num_configs)
         f_config_c_final = np.zeros(self.num_configs)
 
-        E_config_t_final[0:3] = E_config_t_base[0]
-        E_config_t_final[3:6] = E_config_t_base[1]
-        E_config_t_final[6:8] = E_config_t_base[2]
-        E_config_t_final[8:10] = E_config_t_base[3]
-        E_config_t_final[10:12] = E_config_t_base[4]
-        E_config_t_final[12:14] = E_config_t_base[5]
+        # *** FIX: Replaced incorrect overwriting with proper, independent mapping for both trans and cis states. ***
+        # 使用一个映射表来清晰、正确地完成映射
+        map_indices = [
+            (0, 3, 0), (3, 6, 1), (6, 8, 2),
+            (8, 10, 3), (10, 12, 4), (12, 14, 5)
+        ]
+        for start, end, base_idx in map_indices:
+            # 为 trans 态（可见光）进行映射
+            E_config_t_final[start:end] = E_config_t_base[base_idx]
+            f_config_t_final[start:end] = f_config_t_base[base_idx]
+            # 为 cis 态（UV光）进行独立映射
+            E_config_c_final[start:end] = E_config_c_base[base_idx]
+            f_config_c_final[start:end] = f_config_c_base[base_idx]
 
-        E_config_c_final[:] = E_config_t_final
-
-        f_config_t_final[0:3] = f_config_t_base[0]
-        f_config_t_final[3:6] = f_config_t_base[1]
-        f_config_t_final[6:8] = f_config_t_base[2]
-        f_config_t_final[8:10] = f_config_t_base[3]
-        f_config_t_final[10:12] = f_config_t_base[4]
-        f_config_t_final[12:14] = f_config_t_base[5]
-
-        f_config_c_final[:] = f_config_t_final
-
+        # 应用 dE_TYE 能量偏移
         offset_indices = [0, 3, 6, 8, 10, 12]
         E_config_t_final[offset_indices] += dE_TYE
         E_config_c_final[offset_indices] += dE_TYE
 
+        # 清理最终结果，防止非法值
         E_config_t_final = self._sanitize_array(E_config_t_final, nan_replacement=1e6, min_val=-1e6, max_val=1e6)
         E_config_c_final = self._sanitize_array(E_config_c_final, nan_replacement=1e6, min_val=-1e6, max_val=1e6)
         f_config_t_final = self._sanitize_array(f_config_t_final, nan_replacement=0.0, min_val=-1e6, max_val=1e6)
@@ -557,4 +552,4 @@ class NanorobotSolver:
                 return -1000.0
             return float(reward)
         else:
-            return 0.0
+            return -1000.0
