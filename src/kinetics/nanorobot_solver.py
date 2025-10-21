@@ -213,7 +213,6 @@ class NanorobotSolver:
         f_config_t_final = np.zeros(self.num_configs)
         f_config_c_final = np.zeros(self.num_configs)
 
-        # *** FIX: Replaced incorrect overwriting with proper, independent mapping for both trans and cis states. ***
         # 使用一个映射表来清晰、正确地完成映射
         map_indices = [
             (0, 3, 0), (3, 6, 1), (6, 8, 2),
@@ -430,8 +429,9 @@ class NanorobotSolver:
 
         current_P = np.array(P0, dtype=np.float64)
         current_time = 0.0
-        all_times = [current_time]
-        all_probs = [current_P]
+        # 从一开始就使用正确形状的 NumPy 数组来初始化列表
+        times_list = [np.array([current_time])]
+        probs_list = [current_P.reshape(-1, 1)]  # 重塑为一个列向量
 
         for end_time, light_condition in light_schedule:
             if current_time >= total_sim_time:
@@ -445,7 +445,7 @@ class NanorobotSolver:
             if light_condition.lower() == 'uv':
                 k_matrix = k_cis
                 is_light_on = True
-            else:
+            else:  # 默认为 'visible'
                 k_matrix = k_trans
                 is_light_on = False
 
@@ -456,14 +456,19 @@ class NanorobotSolver:
                 method='RK45', dense_output=True, rtol=1e-6, atol=1e-9
             )
 
+            # 检查求解器是否成功并且确实产生了新的时间步
             if sol.success and len(sol.t) > 1:
-                all_times.append(sol.t[1:])
-                all_probs.append(sol.y[:, 1:])
+                # 追加结果，跳过第一个元素以避免时间点重复
+                times_list.append(sol.t[1:])
+                probs_list.append(sol.y[:, 1:])
+
+                # 为下一个片段更新状态
                 current_time = sol.t[-1]
                 current_P = sol.y[:, -1]
 
-        t_combined = np.concatenate(all_times)
-        P_combined = np.hstack(all_probs)
+        # 拼接所有收集到的数组。即使循环没有运行，现在这个操作也是稳健的。
+        t_combined = np.concatenate(times_list)
+        P_combined = np.concatenate(probs_list, axis=1)
 
         sim_df = pd.DataFrame(P_combined.T, columns=[f'P_{i}' for i in range(self.num_configs)])
         sim_df['Time'] = t_combined
