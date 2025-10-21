@@ -1,5 +1,6 @@
 # coding=gb2312
 import numpy as np
+from tqdm import tqdm
 
 
 class EvolutionStrategy:
@@ -26,12 +27,20 @@ class EvolutionStrategy:
             noises = np.random.randn(self.pop_size, self.weights.size)
             candidates = [self.weights + self.sigma * n for n in noises]
 
-            # 使用进程池并行评估所有候选者
-            # 将原来耗时的 for 循环替换为一行 pool.map 调用
+            # 使用进程池并行评估所有候选者，添加tqdm进度条
             print(
                 f"\n--- [主进程] 开始第 {iteration + 1}/{self.num_iterations} 代评估 (分发 {self.pop_size} 个任务)... ---",
                 flush=True)
-            rewards = np.array(self.pool.map(self.reward_function, candidates))
+
+            # 用tqdm包装imap方法显示实时进度
+            rewards = []
+            for reward in tqdm(self.pool.imap(self.reward_function, candidates),
+                               total=self.pop_size,
+                               desc=f"第 {iteration + 1}/{self.num_iterations} 代评估",
+                               leave=False,
+                               ncols=100):
+                rewards.append(reward)
+            rewards = np.array(rewards)
 
             print(f"--- [主进程] 第 {iteration + 1} 代评估完成。开始更新权重... ---", flush=True)
 
@@ -56,6 +65,8 @@ class EvolutionStrategy:
                 std = 1.0
 
             norm_rewards = (rewards - mean) / std
+            # 处理非有限值
+            norm_rewards[~np.isfinite(norm_rewards)] = 0.0
 
             # 计算近似梯度（向量化）
             weighted_noises = np.dot(norm_rewards, noises)
@@ -68,6 +79,6 @@ class EvolutionStrategy:
             print("迭代 {}/{}，最佳奖励 = {:.4f}，当前平均奖励 = {:.4f}".format(
                 iteration + 1, self.num_iterations, float(best_reward if np.isfinite(best_reward) else -np.inf),
                 mean
-            ))
+            ), flush=True)
 
         return best_weights, best_reward

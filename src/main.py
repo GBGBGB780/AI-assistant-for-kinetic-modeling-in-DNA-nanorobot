@@ -4,6 +4,7 @@ import configparser
 import pickle
 import torch
 import multiprocessing
+import traceback
 
 from init_mlp import MLP
 from evolution_strategy import EvolutionStrategy
@@ -65,43 +66,58 @@ def evaluate_candidate_reward(weights):
     """
     global g_mlp_model, g_nanorobot_solver
 
+    pid = multiprocessing.current_process().pid
+
     rewards = []
-    num_evaluations = 5  # 保持多次评估以获得稳定奖励
-    for _ in range(num_evaluations):
-        g_mlp_model.set_weights(weights)
-        noise_input = np.random.randn(1, g_mlp_model.input_size)
-        generated_array = g_mlp_model.predict(noise_input)
-        trained_params = {name: float(value) for name, value in zip(trainable_params_names, generated_array[0])}
+    num_evaluations = 2  # 减少评估次数以提高速度
 
-        all_params = fixed_params.copy()
-        all_params.update(trained_params)
-        g_nanorobot_solver.set_parameters(all_params)
+    # 包裹模型-求解器评估过程在try...except块中
+    try:
+        for i in range(num_evaluations):
+            g_mlp_model.set_weights(weights)
+            noise_input = np.random.randn(1, g_mlp_model.input_size)
+            generated_array = g_mlp_model.predict(noise_input)
+            trained_params = {name: float(value) for name, value in zip(trainable_params_names, generated_array[0])}
 
-        light_schedule = []
-        current_time = 0
-        phases = [('visible', CYCLE_DURATION_VIS), ('uv', CYCLE_DURATION_UV)] if LIGHT_START_MODE == 0 else [
-            ('uv', CYCLE_DURATION_UV), ('visible', CYCLE_DURATION_VIS)]
+            all_params = fixed_params.copy()
+            all_params.update(trained_params)
+            g_nanorobot_solver.set_parameters(all_params)
 
-        if sum(p[1] for p in phases) > 0:
-            while current_time < SIM_TOTAL_TIME:
-                for light_type, duration in phases:
-                    if duration > 0:
-                        current_time += duration
-                        light_schedule.append((current_time, light_type))
+            light_schedule = []
+            current_time = 0
+            phases = [('visible', CYCLE_DURATION_VIS), ('uv', CYCLE_DURATION_UV)] if LIGHT_START_MODE == 0 else [
+                ('uv', CYCLE_DURATION_UV), ('visible', CYCLE_DURATION_VIS)]
 
-        initial_P = np.zeros(g_nanorobot_solver.num_configs)
-        initial_P[INITIAL_CONFIG_IDX] = 1.0
-        sim_df = g_nanorobot_solver.run_simulation(initial_P, SIM_TOTAL_TIME, light_schedule)
+            if sum(p[1] for p in phases) > 0:
+                while current_time < SIM_TOTAL_TIME:
+                    for light_type, duration in phases:
+                        if duration > 0:
+                            current_time += duration
+                            light_schedule.append((current_time, light_type))
 
-        reward = g_nanorobot_solver.evaluate_model(sim_df, REWARD_FLAG)
-        rewards.append(reward)
+            initial_P = np.zeros(g_nanorobot_solver.num_configs)
+            initial_P[INITIAL_CONFIG_IDX] = 1.0
+            sim_df = g_nanorobot_solver.run_simulation(initial_P, SIM_TOTAL_TIME, light_schedule)
 
-    return float(np.mean(rewards))
+            reward = g_nanorobot_solver.evaluate_model(sim_df, REWARD_FLAG)
+            rewards.append(reward)
+
+        # 返回平均奖励
+        avg_reward_numpy = np.mean(rewards)
+        final_reward = float(avg_reward_numpy)
+        return final_reward
+
+    except Exception as e:
+        # 错误处理增强
+        print(f"\n[工作进程PID: {pid}] 发生错误: {e}", flush=True)
+        traceback.print_exc()  # 打印详细错误堆栈
+        print(f"[工作进程PID: {pid}] 评估失败，返回惩罚值 -1000.0", flush=True)
+        return -1000.0  # 返回一个表示失败的、很差的结果
 
 
 # --- 主程序入口 ---
 if __name__ == "__main__":
-    # *** MODIFIED ***: 强制在CPU上运行，因为模型需要在子进程中重建，这是最安全、最兼容的并行化方式
+    # 强制在CPU上运行，因为模型需要在子进程中重建，这是最安全、最兼容的并行化方式
     device = torch.device("cpu")
     print(f"Using device: {device} for parallel processing.")
 
@@ -119,8 +135,23 @@ if __name__ == "__main__":
         "experimental_data_path_a": EXP_DATA_PATH_A
     }
 
-    # 创建并管理进程池
-    num_workers = int(config["EVOSTRAT"].get("n_threads", multiprocessing.cpu_count()))
+    # 创建并管理进程池（增加HPC环境支持）
+    try:
+        import os
+
+        if 'PBS_NCPUS' in os.environ:
+            num_workers = int(os.environ.get('PBS_NCPUS'))
+            print(f"检测到PBS环境，使用分配的 {num_workers} 个CPU核心。")
+        elif 'SLURM_CPUS_PER_TASK' in os.environ:
+            num_workers = int(os.environ.get('SLURM_CPUS_PER_TASK'))
+            print(f"检测到SLURM环境，使用分配的 {num_workers} 个CPU核心。")
+        else:
+            num_workers = int(config["EVOSTRAT"].get("n_threads", multiprocessing.cpu_count()))
+            print(f"未检测到HPC环境，使用 {num_workers} 个CPU核心。")
+    except (ImportError, ValueError, TypeError):
+        num_workers = int(config["EVOSTRAT"].get("n_threads", multiprocessing.cpu_count()))
+        print(f"HPC环境检测失败，使用 {num_workers} 个CPU核心。")
+
     print(f"启动 {num_workers} 个工作进程...")
 
     with multiprocessing.Pool(processes=num_workers, initializer=init_worker,
