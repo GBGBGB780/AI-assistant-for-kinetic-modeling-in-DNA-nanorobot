@@ -8,3 +8,4 @@ scipy
 configparser
 matplotlib>=3.4
 torch
+openpyxl
